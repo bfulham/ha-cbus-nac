@@ -1,0 +1,73 @@
+{
+  "title": "C-Bus NAC",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Import a C-Bus Toolkit project",
+        "description": "Upload a Toolkit `.cbz` backup or project XML. The integration imports project/network names, CNI IP addresses and ports, custom lighting applications, and group tags.",
+        "data": {
+          "project_file": "Toolkit project file"
+        }
+      },
+      "confirm": {
+        "title": "Confirm imported project",
+        "description": "{summary}\n\nConfirming will connect to every detected TCP CNI. A CNI normally permits only one client, so disconnect Toolkit or any other CNI client first."
+      },
+      "reconfigure": {
+        "title": "Update Toolkit project",
+        "description": "Upload a newer backup of the same project. Address-based entity IDs are preserved.",
+        "data": {
+          "project_file": "Updated Toolkit project file"
+        }
+      },
+      "reconfigure_confirm": {
+        "title": "Apply project update",
+        "description": "{summary}"
+      }
+    },
+    "error": {
+      "invalid_project": "The file could not be parsed as a supported Toolkit CBZ/XML project.",
+      "different_project": "The uploaded file has a different C-Bus project identifier. Add it as a separate integration instead.",
+      "invalid_port": "Enter a TCP port from 1 to 65535."
+    },
+    "abort": {
+      "already_configured": "This C-Bus project is already configured.",
+      "reconfigure_successful": "The Toolkit project was updated successfully."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "C-Bus NAC options",
+        "menu_options": {
+          "connections": "Network connections",
+          "entities": "Imported entities"
+        }
+      },
+      "connections": {
+        "title": "Choose a C-Bus network",
+        "data": {
+          "network": "Network"
+        }
+      },
+      "connection": {
+        "title": "Connection for {network}",
+        "description": "Leave host and port overrides empty to follow the values in the latest Toolkit project. A manual host can also make a project network whose saved interface is Serial usable through a NAC/CNI.",
+        "data": {
+          "enabled": "Enable direct TCP connection",
+          "host_override": "Host override",
+          "port_override": "Port override",
+          "monitor_application": "Application used for MMI status monitoring"
+        }
+      },
+      "entities": {
+        "title": "Imported entities",
+        "description": "Generated fitting/group tags are hidden by default. Motion-named lighting groups can be exposed as read-only motion sensors.",
+        "data": {
+          "include_internal_groups": "Include generated/internal groups",
+          "motion_groups_as_binary_sensors": "Expose motion groups as binary sensors"
+        }
+      }
+    }
+  }
+}
