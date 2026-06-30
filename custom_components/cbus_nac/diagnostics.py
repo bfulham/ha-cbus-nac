@@ -23,10 +23,19 @@ async def async_get_config_entry_diagnostics(
     for network in runtime.project["networks"]:
         enabled, host, port, app = runtime.effective_connection(network)
         connection = runtime.connections.get(network["address"])
-        unit_states = [
-            runtime.illuminance_states[(network["address"], unit["address"])]
+        illuminance_units = [
+            unit
             for unit in network.get("units", [])
             if unit.get("supports_illuminance")
+        ]
+        unit_states = [
+            runtime.illuminance_states[(network["address"], unit["address"])]
+            for unit in illuminance_units
+        ]
+        motion_units = [
+            unit
+            for unit in network.get("units", [])
+            if unit.get("supports_motion")
         ]
         error_counts = Counter(
             state.last_error for state in unit_states if state.last_error
@@ -43,11 +52,15 @@ async def async_get_config_entry_diagnostics(
                 "connected": runtime.available(network["address"]),
                 "last_error": connection.last_error if connection else None,
                 "active_applications": network["active_applications"],
-                "illuminance_units": len(unit_states),
+                "illuminance_units": len(illuminance_units),
                 "illuminance_available": sum(
                     1 for state in unit_states if state.available
                 ),
                 "illuminance_errors": dict(error_counts),
+                "motion_units": len(motion_units),
+                "motion_units_with_output": sum(
+                    1 for unit in motion_units if unit.get("motion_groups")
+                ),
                 "remote_service": (
                     {
                         "scheme": remote_settings.scheme,
@@ -74,8 +87,16 @@ async def async_get_config_entry_diagnostics(
                 "schema_version": runtime.project.get("schema_version"),
                 "network_count": len(runtime.project["networks"]),
                 "illuminance_unit_count": sum(
-                    len(network.get("units", []))
+                    1
                     for network in runtime.project["networks"]
+                    for unit in network.get("units", [])
+                    if unit.get("supports_illuminance")
+                ),
+                "motion_unit_count": sum(
+                    1
+                    for network in runtime.project["networks"]
+                    for unit in network.get("units", [])
+                    if unit.get("supports_motion")
                 ),
             },
             "illuminance_enabled": runtime.illuminance_enabled,

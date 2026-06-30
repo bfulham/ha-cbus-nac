@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.6
+
+- Create one Home Assistant device per physical `SENPIRIB`/`5753L` sensor, containing both Motion and Illuminance entities.
+- Parse PIR Light Movement, PIR Dark Movement and block/group programming from Toolkit project files.
+- Motion no longer requires a separately named Motion group; existing PIR-controlled light groups can be used automatically.
+- Match live events by C-Bus source unit so manual light changes are not reported as PIR motion.
+- Remove legacy controller-level motion-group entity registry entries.
+- Keep a physical PIR entity visible but unavailable, with a clear warning, when the unit has no C-Bus output group capable of reporting motion.
+- Mark CNI connection entities as diagnostic.
+- Toolkit project data must be re-uploaded after upgrading so existing entries gain PIR block mappings.
+
 ## 0.1.5
 
 - Fixed integration setup failing on current Home Assistant releases because `UnitOfIlluminance` was removed; illuminance entities now use the supported `LIGHT_LUX` constant.

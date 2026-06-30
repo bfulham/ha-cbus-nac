@@ -8,10 +8,10 @@ from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, Sen
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import LIGHT_LUX
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
+from .entity import cbus_unit_device_info
 from .runtime import CbusRuntime, UnitKey
 from .unit_parameter import light_level_alias
 
@@ -50,15 +50,8 @@ class CbusIlluminanceSensor(SensorEntity):
             f"{project_id}:{self.key[0]}:unit:{self.key[1]}:illuminance"
         )
 
-        settings = runtime.remote_settings(self.network)
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, f"{project_id}:{self.key[0]}:unit:{self.key[1]}")},
-            name=self.unit["name"],
-            manufacturer="Schneider Electric / Clipsal",
-            model=self.unit.get("catalog_number") or self.unit.get("unit_type") or "C-Bus sensor",
-            sw_version=self.unit.get("firmware_version") or None,
-            via_device=(DOMAIN, f"{project_id}:{self.key[0]}"),
-            configuration_url=settings.base_url if settings else None,
+        self._attr_device_info = cbus_unit_device_info(
+            runtime, self.network, self.unit
         )
         self._unsubscribe = None
 

@@ -63,10 +63,10 @@
       },
       "entities": {
         "title": "Imported entities",
-        "description": "Generated fitting/group tags are hidden by default. Motion-named lighting groups can be exposed as read-only motion sensors.",
+        "description": "Physical PIR units are created as their own Home Assistant devices. Motion is derived automatically from the PIR output blocks stored in the Toolkit project, so a separately named Motion group is not required.",
         "data": {
           "include_internal_groups": "Include generated/internal groups",
-          "motion_groups_as_binary_sensors": "Expose motion groups as binary sensors"
+          "motion_groups_as_binary_sensors": "Expose physical PIR units as motion sensors"
         }
       },
       "illuminance": {

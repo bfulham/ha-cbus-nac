@@ -11,6 +11,29 @@ from .const import DOMAIN
 from .runtime import CbusRuntime, GroupKey
 
 
+def cbus_unit_device_info(
+    runtime: CbusRuntime,
+    network: dict[str, Any],
+    unit: dict[str, Any],
+) -> DeviceInfo:
+    """Return the shared Home Assistant device for one physical C-Bus unit."""
+    project_id = runtime.project["project_id"]
+    settings = runtime.remote_settings(network)
+    return DeviceInfo(
+        identifiers={(DOMAIN, f"{project_id}:{network['address']}:unit:{unit['address']}")},
+        name=unit["name"],
+        manufacturer="Schneider Electric / Clipsal",
+        model=(
+            unit.get("catalog_number")
+            or unit.get("unit_type")
+            or "C-Bus sensor"
+        ),
+        sw_version=unit.get("firmware_version") or None,
+        via_device=(DOMAIN, f"{project_id}:{network['address']}"),
+        configuration_url=settings.base_url if settings else None,
+    )
+
+
 class CbusGroupEntity(Entity):
     """Base entity backed by a C-Bus lighting group."""
 
@@ -31,7 +54,9 @@ class CbusGroupEntity(Entity):
         )
         self._attr_name = self.group["name"]
         self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, f"{runtime.project['project_id']}:{self.network['address']}")},
+            identifiers={
+                (DOMAIN, f"{runtime.project['project_id']}:{self.network['address']}")
+            },
             name=self.network["name"],
             manufacturer="Schneider Electric / Clipsal",
             model="C-Bus network via CNI",

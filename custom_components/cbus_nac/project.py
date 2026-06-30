@@ -18,7 +18,10 @@ MAX_ARCHIVE_MEMBERS = 20
 LIGHTING_APPLICATION_MIN = 0x30
 LIGHTING_APPLICATION_MAX = 0x5F
 ILLUMINANCE_UNIT_TYPES = {"SENPIRIB", "SENLL"}
-ILLUMINANCE_CATALOG_NUMBERS = {"5753L", "5031PE"}
+ILLUMINANCE_CATALOG_NUMBERS = {"5753L", "5753PEIRL", "5031PE"}
+MOTION_UNIT_TYPES = {"SENPIRIB"}
+MOTION_CATALOG_NUMBERS = {"5753L", "5753PEIRL"}
+_MOTION_NAME_TOKENS = ("motion", "occupancy", "pir")
 
 _INTERNAL_PATTERNS = (
     re.compile(r"^z", re.IGNORECASE),
@@ -59,6 +62,20 @@ def _hex_values(value: str | None) -> list[int]:
     return result
 
 
+def _pp_element(unit: ET.Element, name: str) -> ET.Element | None:
+    return unit.find(f"PP[@Name='{name}']")
+
+
+def _pp_values(unit: ET.Element, name: str) -> list[int]:
+    element = _pp_element(unit, name)
+    return [] if element is None else _hex_values(element.get("Value"))
+
+
+def _pp_int(unit: ET.Element, name: str, default: int = 0) -> int:
+    values = _pp_values(unit, name)
+    return values[0] if values else default
+
+
 def _parse_interface(interface: ET.Element | None) -> ParsedInterface:
     if interface is None:
         return ParsedInterface("None", "", None, None)
@@ -92,10 +109,16 @@ def is_internal_group(name: str) -> bool:
     return any(pattern.search(cleaned) for pattern in _INTERNAL_PATTERNS)
 
 
+def is_motion_group_name(name: str) -> bool:
+    """Return whether a tag explicitly describes PIR/occupancy state."""
+    lower = name.casefold()
+    return any(token in lower for token in _MOTION_NAME_TOKENS)
+
+
 def classify_group(name: str, relay: bool = False) -> str:
     """Infer a conservative Home Assistant platform for a lighting group."""
     lower = name.casefold()
-    if "motion" in lower and "light" not in lower:
+    if is_motion_group_name(name) and "light" not in lower:
         return "binary_sensor"
     if relay or any(
         token in lower
@@ -110,6 +133,70 @@ def classify_group(name: str, relay: bool = False) -> str:
     ):
         return "switch"
     return "light"
+
+
+def _resolve_motion_groups(
+    unit: dict[str, Any],
+    group_lookup: dict[tuple[int, int], dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Resolve PIR output blocks into group addresses from Toolkit programming.
+
+    A 5753-series PIR reports motion by issuing Lighting Application commands from
+    one or more programmed PIR blocks. Prefer explicitly named Motion/PIR groups,
+    then blocks active in both light and dark conditions, and finally all active PIR
+    output blocks. This means a dedicated Motion group is not required: an existing
+    light-control group can still be used to derive per-unit motion from the source
+    unit address in live C-Bus traffic.
+    """
+    applications: list[int] = unit.pop("_applications", [])
+    groups: list[int] = unit.pop("_group_addresses", [])
+    light_mask = int(unit.pop("_pir_light_movement", 0))
+    dark_mask = int(unit.pop("_pir_dark_movement", 0))
+    second_app_mask = int(unit.pop("_second_application_blocks", 0))
+
+    if not applications or not groups:
+        return []
+
+    union_mask = light_mask | dark_mask
+    common_mask = light_mask & dark_mask
+    candidates: list[dict[str, Any]] = []
+
+    for block, group in enumerate(groups[:8]):
+        bit = 1 << block
+        if group == 0xFF or not union_mask & bit:
+            continue
+        use_second = bool(second_app_mask & bit) and len(applications) > 1
+        application = applications[1] if use_second else applications[0]
+        if application == 0xFF:
+            continue
+        project_group = group_lookup.get((application, group), {})
+        name = str(project_group.get("name") or f"Group {group}")
+        candidates.append(
+            {
+                "application": application,
+                "group": group,
+                "name": name,
+                "block": block,
+                "dedicated": is_motion_group_name(name),
+                "active_in_light": bool(light_mask & bit),
+                "active_in_dark": bool(dark_mask & bit),
+                "active_in_both": bool(common_mask & bit),
+            }
+        )
+
+    explicit = [candidate for candidate in candidates if candidate["dedicated"]]
+    common = [candidate for candidate in candidates if candidate["active_in_both"]]
+    selected = explicit or common or candidates
+
+    unique: list[dict[str, Any]] = []
+    seen: set[tuple[int, int]] = set()
+    for candidate in selected:
+        key = (candidate["application"], candidate["group"])
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(candidate)
+    return unique
 
 
 def _read_project_xml(path: Path) -> tuple[bytes, str]:
@@ -172,11 +259,8 @@ def parse_project_path(path: Path) -> dict[str, Any]:
         unit_models: list[dict[str, Any]] = []
 
         for unit_el in network_el.findall("Unit"):
-            applications: list[int] = []
-            app_pp = unit_el.find("PP[@Name='Application']")
-            if app_pp is not None:
-                applications = [v for v in _hex_values(app_pp.get("Value")) if v != 0xFF]
-                app_use_counts.update(applications)
+            applications = [value for value in _pp_values(unit_el, "Application") if value != 0xFF]
+            app_use_counts.update(applications)
 
             unit_address = _safe_int(unit_el.findtext("Address"), -1)
             unit_type = (unit_el.findtext("UnitType") or "").strip().upper()
@@ -186,26 +270,41 @@ def parse_project_path(path: Path) -> dict[str, Any]:
                     unit_type in ILLUMINANCE_UNIT_TYPES
                     or catalog_number in ILLUMINANCE_CATALOG_NUMBERS
                 )
-                if supports_illuminance:
+                supports_motion = (
+                    unit_type in MOTION_UNIT_TYPES
+                    or catalog_number in MOTION_CATALOG_NUMBERS
+                )
+                if supports_illuminance or supports_motion:
                     unit_models.append(
                         {
                             "address": unit_address,
                             "name": (
-                                unit_el.findtext("TagName")
-                                or f"Unit {unit_address}"
+                                unit_el.findtext("TagName") or f"Unit {unit_address}"
                             ).strip(),
                             "unit_type": unit_type,
                             "catalog_number": catalog_number,
                             "firmware_version": (
                                 unit_el.findtext("FirmwareVersion") or ""
                             ).strip(),
-                            "supports_illuminance": True,
+                            "supports_illuminance": supports_illuminance,
+                            "supports_motion": supports_motion,
+                            "applications": applications,
+                            "_applications": applications,
+                            "_group_addresses": _pp_values(unit_el, "GroupAddress"),
+                            "_pir_light_movement": _pp_int(
+                                unit_el, "PIRLightMovement"
+                            ),
+                            "_pir_dark_movement": _pp_int(
+                                unit_el, "PIRDarkMovement"
+                            ),
+                            "_second_application_blocks": _pp_int(
+                                unit_el, "SecondApplicationBlocks"
+                            ),
                         }
                     )
 
             if unit_type.startswith("REL"):
-                group_pp = unit_el.find("PP[@Name='GroupAddress']")
-                groups = [] if group_pp is None else _hex_values(group_pp.get("Value"))
+                groups = _pp_values(unit_el, "GroupAddress")
                 for app in applications:
                     for group in groups:
                         if group != 0xFF:
@@ -258,6 +357,24 @@ def parse_project_path(path: Path) -> dict[str, Any]:
                 }
             )
 
+        group_lookup = {
+            (application["address"], group["address"]): group
+            for application in application_models
+            for group in application["groups"]
+        }
+        for unit in unit_models:
+            unit["motion_groups"] = (
+                _resolve_motion_groups(unit, group_lookup)
+                if unit.get("supports_motion")
+                else []
+            )
+            # Clean up temporary parser-only keys for non-motion units too.
+            unit.pop("_applications", None)
+            unit.pop("_group_addresses", None)
+            unit.pop("_pir_light_movement", None)
+            unit.pop("_pir_dark_movement", None)
+            unit.pop("_second_application_blocks", None)
+
         active_apps = [
             app["address"]
             for app in sorted(
@@ -291,7 +408,7 @@ def parse_project_path(path: Path) -> dict[str, Any]:
         raise ProjectError("No C-Bus networks were found in the project")
 
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "source_name": source_name,
         "source_sha256": digest,
         "db_version": (root.findtext("DBVersion") or "").strip(),
@@ -322,7 +439,22 @@ def project_summary(project: dict[str, Any]) -> str:
         if group["address"] != 255 and not group["internal"]
     )
     illuminance_units = sum(
-        len(n.get("units", [])) for n in networks
+        1
+        for network in networks
+        for unit in network.get("units", [])
+        if unit.get("supports_illuminance")
+    )
+    motion_units = sum(
+        1
+        for network in networks
+        for unit in network.get("units", [])
+        if unit.get("supports_motion")
+    )
+    motion_without_output = sum(
+        1
+        for network in networks
+        for unit in network.get("units", [])
+        if unit.get("supports_motion") and not unit.get("motion_groups")
     )
     connection_lines = [
         f"• {n['address']} — {n['name']}: {n['interface']['host']}:{n['interface']['port']}"
@@ -337,7 +469,8 @@ def project_summary(project: dict[str, Any]) -> str:
         f"Project **{project['project_name']}** contains {len(networks)} networks, "
         f"{len(cni)} detected TCP CNI connections, {applications} referenced lighting "
         f"applications, {groups} project group records, {candidates} named group entity "
-        f"candidates and {illuminance_units} illuminance-capable units.\n\n"
+        f"candidates, {illuminance_units} illuminance-capable units and {motion_units} "
+        f"physical PIR units ({motion_without_output} with no reportable PIR output group).\n\n"
         + "\n".join(connection_lines)
     )
 
@@ -385,16 +518,25 @@ def project_diff(old: dict[str, Any], new: dict[str, Any]) -> str:
         if old_groups[key].get("platform") != new_groups[key].get("platform")
     ]
 
-    def unit_keys(project: dict[str, Any]) -> set[tuple[int, int]]:
+    def unit_map(project: dict[str, Any]) -> dict[tuple[int, int], dict[str, Any]]:
         return {
-            (network["address"], unit["address"])
+            (network["address"], unit["address"]): unit
             for network in project["networks"]
             for unit in network.get("units", [])
-            if unit.get("supports_illuminance")
         }
 
-    old_units = unit_keys(old)
-    new_units = unit_keys(new)
+    old_units = unit_map(old)
+    new_units = unit_map(new)
+    old_illum = {key for key, unit in old_units.items() if unit.get("supports_illuminance")}
+    new_illum = {key for key, unit in new_units.items() if unit.get("supports_illuminance")}
+    old_motion = {key for key, unit in old_units.items() if unit.get("supports_motion")}
+    new_motion = {key for key, unit in new_units.items() if unit.get("supports_motion")}
+    motion_mapping_changes = sum(
+        1
+        for key in old_motion & new_motion
+        if old_units[key].get("motion_groups", [])
+        != new_units[key].get("motion_groups", [])
+    )
 
     parts = [
         f"Networks added: {', '.join(map(str, added_networks)) if added_networks else 'none'}",
@@ -403,8 +545,11 @@ def project_diff(old: dict[str, Any], new: dict[str, Any]) -> str:
         f"Groups removed: {len(old_keys - new_keys)}",
         f"Groups renamed: {len(renamed)}",
         f"Groups reclassified: {len(reclassified)}",
-        f"Illuminance units added: {len(new_units - old_units)}",
-        f"Illuminance units removed: {len(old_units - new_units)}",
+        f"Illuminance units added: {len(new_illum - old_illum)}",
+        f"Illuminance units removed: {len(old_illum - new_illum)}",
+        f"Motion units added: {len(new_motion - old_motion)}",
+        f"Motion units removed: {len(old_motion - new_motion)}",
+        f"Motion output mappings changed: {motion_mapping_changes}",
     ]
     if renamed:
         preview = "; ".join(

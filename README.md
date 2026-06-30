@@ -2,11 +2,11 @@
 
 Direct, local Home Assistant integration for Clipsal/Schneider C-Bus through the built-in CNI service of a 5500NAC/5500SHAC or compatible Ethernet CNI. No C-Gate, MQTT bridge, add-on, or Lua code on the NAC is required.
 
-> **v0.1.5 is an early hardware-test release.** The Toolkit importer and protocol framing are covered by local tests, but this package could not be exercised against the private CNI addresses in the supplied project. Start with a small number of non-critical groups and keep Toolkit available for recovery.
+> **v0.1.6 is an early hardware-test release.** The Toolkit importer and protocol framing are covered by local tests, but this package could not be exercised against the private CNI addresses in the supplied project. Start with a small number of non-critical groups and keep Toolkit available for recovery.
 
-> **v0.1.5 compatibility fix:** Home Assistant 2026.6 no longer exposes `UnitOfIlluminance`. This release uses `LIGHT_LUX` and cleans up CNI tasks if a platform setup fails, so failed setup attempts cannot leave orphaned CNI clients.
+> **v0.1.6 sensor-device update:** motion and illuminance now belong to the same physical C-Bus sensor device. Re-upload the Toolkit project through **Reconfigure** after upgrading so PIR block programming is added to the stored project model.
 
-## What v0.1.5 does
+## What v0.1.6 does
 
 - Processes non-terminated PCI/CNI command confirmations immediately, avoiding the previous wait for the next MMI report.
 - Pipelines simultaneous Home Assistant commands using independent CNI confirmation tags.
@@ -18,7 +18,10 @@ Direct, local Home Assistant integration for Clipsal/Schneider C-Bus through the
 - Talks directly to each CNI using the public C-Bus PCI/CNI serial protocol over TCP.
 - Receives physical ON, OFF and RAMP TO LEVEL commands as push updates.
 - Uses standard MMI reports for cold-start on/off state.
-- Creates lights, relay/control switches and motion binary sensors.
+- Creates lights and relay/control switches under each C-Bus network/controller device.
+- Creates one physical device for each imported PIR/multisensor, containing its Motion and optional Illuminance entities.
+- Detects PIR output blocks directly from Toolkit programming, so a separately named `Motion` group is not required.
+- Uses the live C-Bus source unit address to avoid treating manual changes to a shared light group as motion.
 - Imports 5753L/SENPIRIB and 5031PE/SENLL physical units as optional illuminance sensors.
 - Reads lux values from each NAC's built-in Unit Parameter application over its JSON remote service, without requiring a Lighting broadcast group.
 - Lets an updated Toolkit file be uploaded later using **Reconfigure** without changing address-based entity unique IDs.
@@ -65,7 +68,7 @@ All saved TCP CNI interfaces are enabled by default. The integration creates a c
 
 ## Direct illuminance sensors (no broadcast group)
 
-v0.1.5 imports the physical unit address and name for supported light-level sensors from the Toolkit project. For the supplied THEBEND project it detects 87 illuminance-capable units: 86 `5753L` multisensors and one `5031PE` light-level sensor.
+v0.1.6 imports the physical unit address and name for supported light-level sensors from the Toolkit project. For the supplied THEBEND project it detects 87 illuminance-capable units: 86 `5753L` multisensors and one `5031PE` light-level sensor.
 
 This feature does **not** use a C-Bus Lighting group or light-level broadcast address. It uses the 5500NAC built-in **255 — Unit Parameter** application. The NAC polls the physical unit, and Home Assistant reads the resulting exported object through `/scada-remote/`. No Lua or other custom code is installed on the NAC.
 
@@ -90,7 +93,7 @@ For example, Toolkit network 253 unit 21 is read from `0/255/21/2` on the NAC at
 
 ### Home Assistant configuration
 
-1. After updating to v0.1.5, use **Reconfigure** and upload the Toolkit `.cbz` again. This updates the stored project model with physical unit records.
+1. After updating to v0.1.6, use **Reconfigure** and upload the Toolkit `.cbz` again. This updates the stored project model with physical unit records.
 2. Open **Configure → Illuminance sensors**.
 3. Enable physical illuminance sensors.
 4. Enter the NAC Remote Services protocol, port, username and password. The same credentials are used for all imported NAC hosts.
@@ -123,7 +126,7 @@ Open **Configure → Network connections**, select a network, then optionally se
 
 Blank overrides follow the latest values imported from Toolkit, so changing an IP/port in a newly uploaded project takes effect automatically.
 
-## Entity import rules in v0.1.5
+## Entity import rules in v0.1.6
 
 Toolkit groups in applications referenced by programmed units are imported. By default, generated/internal names are skipped, including:
 
@@ -134,9 +137,12 @@ Toolkit groups in applications referenced by programmed units are imported. By d
 
 Classification is conservative:
 
-- Names containing `Motion` become read-only motion binary sensors.
 - Relay groups found in relay output programming, plus names such as `Relay`, `PIR Enable` and `DLT Trigger`, become switches.
-- Other groups become brightness-capable lights.
+- Other controllable groups become brightness-capable lights.
+- Groups explicitly named `Motion`, `PIR` or `Occupancy` are no longer created as separate controller-level entities.
+- Physical `SENPIRIB`/`5753L` units become their own devices. Their PIR Light Movement and PIR Dark Movement blocks are imported automatically and used to create one unit-backed Motion entity.
+
+A dedicated Motion group is not required. If a PIR already controls an ordinary light group, the integration can derive motion from commands whose C-Bus source unit matches that PIR. Manual commands from switches or Home Assistant do not set the PIR entity. However, a PIR with **no programmed C-Bus output group at all** cannot report motion through the standard CNI stream, so its entity is created but remains unavailable with a configuration warning.
 
 This is only an import heuristic. Home Assistant entity enable/disable and naming can be adjusted after setup. More complete output-channel capability parsing is planned for a later release.
 
@@ -156,7 +162,7 @@ Live SAL messages are decoded using the application address in each received pac
 
 ### Protocol scope
 
-v0.1.5 supports the public Lighting Application command subset: ON, OFF, RAMP TO LEVEL and standard MMI. Trigger Control, Enable Control, Measurement, HVAC, scenes and routed bridge control are not yet implemented as native platforms.
+v0.1.6 supports the public Lighting Application command subset: ON, OFF, RAMP TO LEVEL and standard MMI. Trigger Control, Enable Control, Measurement, HVAC, scenes and routed bridge control are not yet implemented as native platforms.
 
 ## Debug logging
 

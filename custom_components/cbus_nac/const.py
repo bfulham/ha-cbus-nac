@@ -4,7 +4,7 @@ from __future__ import annotations
 
 DOMAIN = "cbus_nac"
 NAME = "C-Bus NAC"
-VERSION = "0.1.5"
+VERSION = "0.1.6"
 
 PLATFORMS = ["light", "switch", "binary_sensor", "sensor"]
 

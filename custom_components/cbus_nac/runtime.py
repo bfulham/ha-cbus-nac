@@ -50,7 +50,7 @@ _LOGGER = logging.getLogger(__name__)
 
 GroupKey = tuple[int, int, int]
 UnitKey = tuple[int, int]
-ListenerKey = GroupKey | UnitKey | tuple[int]
+ListenerKey = tuple[Any, ...]
 
 
 @dataclass(slots=True)
@@ -72,6 +72,25 @@ class IlluminanceState:
     last_error: str | None = None
 
 
+@dataclass(slots=True)
+class MotionState:
+    """Last motion state derived from one physical PIR unit's C-Bus commands."""
+
+    is_on: bool | None = None
+    last_updated: datetime | None = None
+    last_application: int | None = None
+    last_group: int | None = None
+    last_source: int | None = None
+
+
+@dataclass(slots=True, frozen=True)
+class MotionBinding:
+    """Map one C-Bus group event to a physical PIR unit."""
+
+    unit_key: UnitKey
+    dedicated: bool
+
+
 class CbusRuntime:
     """Own all CNI and NAC remote-service connections for one project."""
 
@@ -89,8 +108,31 @@ class CbusRuntime:
         self.illuminance_states: dict[UnitKey, IlluminanceState] = defaultdict(
             IlluminanceState
         )
+        self.motion_states: dict[UnitKey, MotionState] = defaultdict(MotionState)
         self._listeners: dict[ListenerKey, set[Callable[[], None]]] = defaultdict(set)
         self._illuminance_tasks: list[asyncio.Task[None]] = []
+        self._motion_bindings: dict[GroupKey, list[MotionBinding]] = defaultdict(list)
+        self._motion_units: dict[UnitKey, dict[str, Any]] = {}
+        self._build_motion_bindings()
+
+    def _build_motion_bindings(self) -> None:
+        """Index Toolkit PIR output programming for fast live-event matching."""
+        for network in self.project["networks"]:
+            network_address = network["address"]
+            for unit in network.get("units", []):
+                if not unit.get("supports_motion"):
+                    continue
+                unit_key = (network_address, unit["address"])
+                self._motion_units[unit_key] = unit
+                for group in unit.get("motion_groups", []):
+                    key = (
+                        network_address,
+                        int(group["application"]),
+                        int(group["group"]),
+                    )
+                    self._motion_bindings[key].append(
+                        MotionBinding(unit_key, bool(group.get("dedicated")))
+                    )
 
     @property
     def include_internal(self) -> bool:
@@ -101,7 +143,7 @@ class CbusRuntime:
 
     @property
     def motion_sensors(self) -> bool:
-        """Return whether motion-named groups are binary sensors."""
+        """Return whether physical PIR units should be exposed as motion sensors."""
         return bool(self.entry.options.get(CONF_MOTION_SENSORS, DEFAULT_MOTION_SENSORS))
 
     @property
@@ -131,7 +173,9 @@ class CbusRuntime:
         address = network["address"]
         interface = network["interface"]
         default_enabled = bool(interface.get("host"))
-        enabled = bool(self.entry.options.get(f"{CONF_ENABLED}_{address}", default_enabled))
+        enabled = bool(
+            self.entry.options.get(f"{CONF_ENABLED}_{address}", default_enabled)
+        )
         host_override = str(
             self.entry.options.get(f"{CONF_HOST_OVERRIDE}_{address}", "")
         ).strip()
@@ -215,7 +259,9 @@ class CbusRuntime:
         connection = self.connections.get(network)
         return bool(connection and connection.connected)
 
-    def subscribe(self, key: ListenerKey, callback: Callable[[], None]) -> Callable[[], None]:
+    def subscribe(
+        self, key: ListenerKey, callback: Callable[[], None]
+    ) -> Callable[[], None]:
         """Subscribe to a group, unit, or network availability update."""
         self._listeners[key].add(callback)
 
@@ -244,7 +290,7 @@ class CbusRuntime:
         await connection.send_level(application, group, level, transition)
 
     def group_definitions(self, platform: str) -> list[dict[str, Any]]:
-        """Return imported groups that should be exposed on a platform."""
+        """Return imported controllable groups that belong on a HA platform."""
         result: list[dict[str, Any]] = []
         for network in self.project["networks"]:
             active = set(network["active_applications"])
@@ -256,10 +302,12 @@ class CbusRuntime:
                         continue
                     if group["internal"] and not self.include_internal:
                         continue
-                    selected_platform = group["platform"]
-                    if selected_platform == "binary_sensor" and not self.motion_sensors:
-                        selected_platform = "light"
-                    if selected_platform != platform:
+                    # Motion-tagged groups are implementation details of physical
+                    # PIR devices in v0.1.6. They no longer appear as separate
+                    # entities under the controller/network device.
+                    if group["platform"] == "binary_sensor":
+                        continue
+                    if group["platform"] != platform:
                         continue
                     result.append(
                         {
@@ -269,6 +317,40 @@ class CbusRuntime:
                         }
                     )
         return result
+
+    def legacy_motion_group_definitions(self) -> list[dict[str, Any]]:
+        """Return old group-backed motion entities so their registry entries can go."""
+        return [
+            {
+                "network": network,
+                "application": application,
+                "group": group,
+            }
+            for network in self.project["networks"]
+            for application in network["applications"]
+            for group in application["groups"]
+            if group.get("platform") == "binary_sensor" and group["address"] != 255
+        ]
+
+    def motion_definitions(self) -> list[dict[str, Any]]:
+        """Return physical PIR units imported from Toolkit."""
+        if not self.motion_sensors:
+            return []
+        return [
+            {"network": network, "unit": unit}
+            for network in self.project["networks"]
+            for unit in network.get("units", [])
+            if unit.get("supports_motion")
+        ]
+
+    def motion_available(self, key: UnitKey) -> bool:
+        """Return whether a physical PIR can currently report motion."""
+        unit = self._motion_units.get(key)
+        return bool(
+            unit
+            and unit.get("motion_groups")
+            and self.available(key[0])
+        )
 
     def illuminance_definitions(self) -> list[dict[str, Any]]:
         """Return physical units imported as illuminance-capable sensors."""
@@ -369,6 +451,9 @@ class CbusRuntime:
             state.brightness = event.level
             state.is_on = event.level > 0
         state.source = event.source
+
+        self._handle_motion_event(key, event)
+
         self.hass.bus.async_fire(
             EVENT_CBUS,
             {
@@ -384,6 +469,40 @@ class CbusRuntime:
         )
         self._notify(key)
 
+    def _handle_motion_event(self, key: GroupKey, event: CbusLevelEvent) -> None:
+        """Update physical PIR state from its own outgoing group commands."""
+        bindings = self._motion_bindings.get(key, [])
+        if not bindings:
+            return
+
+        event_is_on = event.is_on
+        if event.level is not None:
+            event_is_on = event.level > 0
+        if event_is_on is None:
+            return
+
+        for binding in bindings:
+            unit_key = binding.unit_key
+            if event.source is not None:
+                # Live SAL includes the originating physical unit. This lets a
+                # PIR use an ordinary light group without that light's manual
+                # changes being misreported as motion.
+                if event.source != unit_key[1]:
+                    continue
+            else:
+                # MMI has no source unit. It is only safe for a dedicated motion
+                # group that belongs to one physical PIR.
+                if not binding.dedicated or len(bindings) != 1:
+                    continue
+
+            motion = self.motion_states[unit_key]
+            motion.is_on = event_is_on
+            motion.last_updated = datetime.now(UTC)
+            motion.last_application = event.application
+            motion.last_group = event.group
+            motion.last_source = event.source
+            self._notify(unit_key)
+
     def _apply_level(self, key: GroupKey, level: int, source: int | None) -> None:
         state = self.states[key]
         state.is_on = level > 0
@@ -395,7 +514,7 @@ class CbusRuntime:
         _LOGGER.info("C-Bus network %s availability changed to %s", network, available)
         self._notify((network,))
         for key in list(self._listeners):
-            if len(key) == 3 and key[0] == network:
+            if len(key) in (2, 3) and key[0] == network:
                 self._notify(key)
 
     def _notify(self, key: ListenerKey) -> None:
