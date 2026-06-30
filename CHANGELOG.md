@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.3
+
+- Disabled Home Assistant's default per-platform action semaphore for C-Bus lights and switches.
+- Multi-entity light/switch actions can now reach the integration concurrently instead of being dispatched one entity at a time.
+- The existing per-CNI confirmation tags and 17-command in-flight limit continue to provide protocol-level flow control.
+
 ## 0.1.2
 
 - Fixed command acknowledgements being delayed until the next CR-terminated MMI packet.

@@ -13,6 +13,12 @@ from .const import DOMAIN
 from .entity import CbusGroupEntity
 from .runtime import CbusRuntime
 
+# This integration has its own per-CNI command concurrency and confirmation
+# tracking. Home Assistant must not serialize entity action calls at the
+# platform level, otherwise a multi-light service call is sent one group at a
+# time. A value of 0 disables the platform semaphore.
+PARALLEL_UPDATES = 0
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
