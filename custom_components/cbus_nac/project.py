@@ -17,6 +17,8 @@ MAX_XML_BYTES = 25 * 1024 * 1024
 MAX_ARCHIVE_MEMBERS = 20
 LIGHTING_APPLICATION_MIN = 0x30
 LIGHTING_APPLICATION_MAX = 0x5F
+ILLUMINANCE_UNIT_TYPES = {"SENPIRIB", "SENLL"}
+ILLUMINANCE_CATALOG_NUMBERS = {"5753L", "5031PE"}
 
 _INTERNAL_PATTERNS = (
     re.compile(r"^z", re.IGNORECASE),
@@ -167,6 +169,7 @@ def parse_project_path(path: Path) -> dict[str, Any]:
 
         app_use_counts: Counter[int] = Counter()
         relay_groups: set[tuple[int, int]] = set()
+        unit_models: list[dict[str, Any]] = []
 
         for unit_el in network_el.findall("Unit"):
             applications: list[int] = []
@@ -175,7 +178,31 @@ def parse_project_path(path: Path) -> dict[str, Any]:
                 applications = [v for v in _hex_values(app_pp.get("Value")) if v != 0xFF]
                 app_use_counts.update(applications)
 
-            unit_type = (unit_el.findtext("UnitType") or "").upper()
+            unit_address = _safe_int(unit_el.findtext("Address"), -1)
+            unit_type = (unit_el.findtext("UnitType") or "").strip().upper()
+            catalog_number = (unit_el.findtext("CatalogNumber") or "").strip().upper()
+            if 0 <= unit_address <= 255:
+                supports_illuminance = (
+                    unit_type in ILLUMINANCE_UNIT_TYPES
+                    or catalog_number in ILLUMINANCE_CATALOG_NUMBERS
+                )
+                if supports_illuminance:
+                    unit_models.append(
+                        {
+                            "address": unit_address,
+                            "name": (
+                                unit_el.findtext("TagName")
+                                or f"Unit {unit_address}"
+                            ).strip(),
+                            "unit_type": unit_type,
+                            "catalog_number": catalog_number,
+                            "firmware_version": (
+                                unit_el.findtext("FirmwareVersion") or ""
+                            ).strip(),
+                            "supports_illuminance": True,
+                        }
+                    )
+
             if unit_type.startswith("REL"):
                 group_pp = unit_el.find("PP[@Name='GroupAddress']")
                 groups = [] if group_pp is None else _hex_values(group_pp.get("Value"))
@@ -255,6 +282,7 @@ def parse_project_path(path: Path) -> dict[str, Any]:
                 "active_applications": active_apps,
                 "monitor_application": active_apps[0] if active_apps else 56,
                 "applications": application_models,
+                "units": unit_models,
                 "unit_count": len(network_el.findall("Unit")),
             }
         )
@@ -263,7 +291,7 @@ def parse_project_path(path: Path) -> dict[str, Any]:
         raise ProjectError("No C-Bus networks were found in the project")
 
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "source_name": source_name,
         "source_sha256": digest,
         "db_version": (root.findtext("DBVersion") or "").strip(),
@@ -293,6 +321,9 @@ def project_summary(project: dict[str, Any]) -> str:
         for group in app["groups"]
         if group["address"] != 255 and not group["internal"]
     )
+    illuminance_units = sum(
+        len(n.get("units", [])) for n in networks
+    )
     connection_lines = [
         f"• {n['address']} — {n['name']}: {n['interface']['host']}:{n['interface']['port']}"
         for n in cni
@@ -305,8 +336,9 @@ def project_summary(project: dict[str, Any]) -> str:
     return (
         f"Project **{project['project_name']}** contains {len(networks)} networks, "
         f"{len(cni)} detected TCP CNI connections, {applications} referenced lighting "
-        f"applications, {groups} project group records and {candidates} named entity "
-        f"candidates with internal groups hidden.\n\n" + "\n".join(connection_lines)
+        f"applications, {groups} project group records, {candidates} named group entity "
+        f"candidates and {illuminance_units} illuminance-capable units.\n\n"
+        + "\n".join(connection_lines)
     )
 
 
@@ -353,6 +385,17 @@ def project_diff(old: dict[str, Any], new: dict[str, Any]) -> str:
         if old_groups[key].get("platform") != new_groups[key].get("platform")
     ]
 
+    def unit_keys(project: dict[str, Any]) -> set[tuple[int, int]]:
+        return {
+            (network["address"], unit["address"])
+            for network in project["networks"]
+            for unit in network.get("units", [])
+            if unit.get("supports_illuminance")
+        }
+
+    old_units = unit_keys(old)
+    new_units = unit_keys(new)
+
     parts = [
         f"Networks added: {', '.join(map(str, added_networks)) if added_networks else 'none'}",
         f"Networks removed: {', '.join(map(str, removed_networks)) if removed_networks else 'none'}",
@@ -360,6 +403,8 @@ def project_diff(old: dict[str, Any], new: dict[str, Any]) -> str:
         f"Groups removed: {len(old_keys - new_keys)}",
         f"Groups renamed: {len(renamed)}",
         f"Groups reclassified: {len(reclassified)}",
+        f"Illuminance units added: {len(new_units - old_units)}",
+        f"Illuminance units removed: {len(old_units - new_units)}",
     ]
     if renamed:
         preview = "; ".join(

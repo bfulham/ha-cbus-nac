@@ -2,9 +2,9 @@
 
 Direct, local Home Assistant integration for Clipsal/Schneider C-Bus through the built-in CNI service of a 5500NAC/5500SHAC or compatible Ethernet CNI. No C-Gate, MQTT bridge, add-on, or Lua code on the NAC is required.
 
-> **v0.1.2 is an early hardware-test release.** The Toolkit importer and protocol framing are covered by local tests, but this package could not be exercised against the private CNI addresses in the supplied project. Start with a small number of non-critical groups and keep Toolkit available for recovery.
+> **v0.1.4 is an early hardware-test release.** The Toolkit importer and protocol framing are covered by local tests, but this package could not be exercised against the private CNI addresses in the supplied project. Start with a small number of non-critical groups and keep Toolkit available for recovery.
 
-## What v0.1.2 does
+## What v0.1.4 does
 
 - Processes non-terminated PCI/CNI command confirmations immediately, avoiding the previous wait for the next MMI report.
 - Pipelines simultaneous Home Assistant commands using independent CNI confirmation tags.
@@ -17,6 +17,8 @@ Direct, local Home Assistant integration for Clipsal/Schneider C-Bus through the
 - Receives physical ON, OFF and RAMP TO LEVEL commands as push updates.
 - Uses standard MMI reports for cold-start on/off state.
 - Creates lights, relay/control switches and motion binary sensors.
+- Imports 5753L/SENPIRIB and 5031PE/SENLL physical units as optional illuminance sensors.
+- Reads lux values from each NAC's built-in Unit Parameter application over its JSON remote service, without requiring a Lighting broadcast group.
 - Lets an updated Toolkit file be uploaded later using **Reconfigure** without changing address-based entity unique IDs.
 - Allows per-network host/port overrides, including converting a project saved with a Serial interface to a TCP CNI connection.
 
@@ -59,6 +61,43 @@ Copy `custom_components/cbus_nac` to `/config/custom_components/cbus_nac` and re
 
 All saved TCP CNI interfaces are enabled by default. The integration creates a connectivity binary sensor for each configured TCP network.
 
+## Direct illuminance sensors (no broadcast group)
+
+v0.1.4 imports the physical unit address and name for supported light-level sensors from the Toolkit project. For the supplied THEBEND project it detects 87 illuminance-capable units: 86 `5753L` multisensors and one `5031PE` light-level sensor.
+
+This feature does **not** use a C-Bus Lighting group or light-level broadcast address. It uses the 5500NAC built-in **255 — Unit Parameter** application. The NAC polls the physical unit, and Home Assistant reads the resulting exported object through `/scada-remote/`. No Lua or other custom code is installed on the NAC.
+
+### NAC preparation
+
+On each NAC, create an object for every local sensor that should be exposed:
+
+1. Open **Configurator → Objects → Add new object**.
+2. Select **255 — Unit Parameter**.
+3. Select the sensor's local C-Bus unit address.
+4. Select **Light level**.
+5. Enable **Export** for the object.
+6. Enable **Remote services** under **Utilities → System → Services** and set its credentials.
+
+The composed address used by Home Assistant is:
+
+```text
+0/255/<unit-address>/2
+```
+
+For example, Toolkit network 253 unit 21 is read from `0/255/21/2` on the NAC attached to network 253. The `0` is intentional: each NAC addresses its own local C-Bus network as network 0.
+
+### Home Assistant configuration
+
+1. After updating to v0.1.4, use **Reconfigure** and upload the Toolkit `.cbz` again. This updates the stored project model with physical unit records.
+2. Open **Configure → Illuminance sensors**.
+3. Enable physical illuminance sensors.
+4. Enter the NAC Remote Services protocol, port, username and password. The same credentials are used for all imported NAC hosts.
+5. Set a refresh interval; 60 seconds is the default.
+
+One `/scada-remote/?m=json&r=objects` request is made per NAC per interval, rather than one request per sensor. A missing or non-exported Unit Parameter object only makes that individual illuminance entity unavailable; its `last_error` attribute explains which alias is missing.
+
+This implementation deliberately does not attempt undocumented raw CAL/unit-commissioning commands through the CNI.
+
 ## Updating the project
 
 Use the integration's three-dot menu and choose **Reconfigure**. Upload the newer `.cbz` file and review the change summary.
@@ -82,7 +121,7 @@ Open **Configure → Network connections**, select a network, then optionally se
 
 Blank overrides follow the latest values imported from Toolkit, so changing an IP/port in a newly uploaded project takes effect automatically.
 
-## Entity import rules in v0.1.2
+## Entity import rules in v0.1.4
 
 Toolkit groups in applications referenced by programmed units are imported. By default, generated/internal names are skipped, including:
 
@@ -115,7 +154,7 @@ Live SAL messages are decoded using the application address in each received pac
 
 ### Protocol scope
 
-v0.1.2 supports the public Lighting Application command subset: ON, OFF, RAMP TO LEVEL and standard MMI. Trigger Control, Enable Control, Measurement, HVAC, scenes and routed bridge control are not yet implemented as native platforms.
+v0.1.4 supports the public Lighting Application command subset: ON, OFF, RAMP TO LEVEL and standard MMI. Trigger Control, Enable Control, Measurement, HVAC, scenes and routed bridge control are not yet implemented as native platforms.
 
 ## Debug logging
 

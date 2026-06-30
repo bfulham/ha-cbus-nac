@@ -13,6 +13,9 @@ XML = b'''<?xml version="1.0"?>
 <Group><TagName>Lobby Motion</TagName><Address>2</Address></Group></Application>
 <Unit><TagName>Output</TagName><Address>1</Address><UnitType>RELDN4</UnitType>
 <PP Name="Application" Value="0x3d 0xff"/><PP Name="GroupAddress" Value="0x1 0xff"/></Unit>
+<Unit><TagName>Lobby Sensor</TagName><Address>20</Address><UnitType>SENPIRIB</UnitType>
+<CatalogNumber>5753L</CatalogNumber><FirmwareVersion>2.4.00</FirmwareVersion>
+<PP Name="Application" Value="0x3d 0xff"/></Unit>
 </Network></Project></Installation>'''
 
 
@@ -29,3 +32,13 @@ def test_parse_cbz(tmp_path: Path):
     groups = network["applications"][0]["groups"]
     assert groups[0]["platform"] == "switch"
     assert groups[1]["platform"] == "binary_sensor"
+    assert network["units"] == [
+        {
+            "address": 20,
+            "name": "Lobby Sensor",
+            "unit_type": "SENPIRIB",
+            "catalog_number": "5753L",
+            "firmware_version": "2.4.00",
+            "supports_illuminance": True,
+        }
+    ]

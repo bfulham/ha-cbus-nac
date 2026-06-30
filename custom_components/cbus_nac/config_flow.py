@@ -10,11 +10,19 @@ import voluptuous as vol
 from homeassistant.components.file_upload import process_uploaded_file
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
 from homeassistant.core import callback
-from homeassistant.helpers.selector import FileSelector, FileSelectorConfig
+from homeassistant.helpers.selector import (
+    FileSelector,
+    FileSelectorConfig,
+    TextSelector,
+    TextSelectorConfig,
+    TextSelectorType,
+)
 
 from .const import (
     CONF_ENABLED,
     CONF_HOST_OVERRIDE,
+    CONF_ILLUMINANCE_ENABLED,
+    CONF_ILLUMINANCE_POLL_INTERVAL,
     CONF_INCLUDE_INTERNAL,
     CONF_MONITOR_APPLICATION,
     CONF_MOTION_SENSORS,
@@ -25,8 +33,19 @@ from .const import (
     CONF_PROJECT_ID,
     CONF_PROJECT_KEY,
     CONF_PROJECT_NAME,
+    CONF_REMOTE_API_PASSWORD,
+    CONF_REMOTE_API_PORT,
+    CONF_REMOTE_API_SCHEME,
+    CONF_REMOTE_API_USERNAME,
+    CONF_REMOTE_API_VERIFY_SSL,
+    DEFAULT_ILLUMINANCE_ENABLED,
+    DEFAULT_ILLUMINANCE_POLL_INTERVAL,
     DEFAULT_INCLUDE_INTERNAL,
     DEFAULT_MOTION_SENSORS,
+    DEFAULT_REMOTE_API_PORT,
+    DEFAULT_REMOTE_API_SCHEME,
+    DEFAULT_REMOTE_API_USERNAME,
+    DEFAULT_REMOTE_API_VERIFY_SSL,
     DOMAIN,
 )
 from .project import ProjectError, parse_project_path, project_diff, project_summary
@@ -187,7 +206,8 @@ class CbusNacOptionsFlow(OptionsFlow):
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Show options menu."""
         return self.async_show_menu(
-            step_id="init", menu_options=["connections", "entities"]
+            step_id="init",
+            menu_options=["connections", "entities", "illuminance"],
         )
 
     async def async_step_connections(
@@ -301,6 +321,89 @@ class CbusNacOptionsFlow(OptionsFlow):
                     ),
                 ): vol.In(monitor_choices),
             }
+        )
+
+    async def async_step_illuminance(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Configure direct illuminance reads through NAC Unit Parameter objects."""
+        if user_input is not None:
+            options = {
+                **self.config_entry.options,
+                CONF_ILLUMINANCE_ENABLED: bool(
+                    user_input[CONF_ILLUMINANCE_ENABLED]
+                ),
+                CONF_ILLUMINANCE_POLL_INTERVAL: int(
+                    user_input[CONF_ILLUMINANCE_POLL_INTERVAL]
+                ),
+                CONF_REMOTE_API_SCHEME: str(
+                    user_input[CONF_REMOTE_API_SCHEME]
+                ),
+                CONF_REMOTE_API_PORT: int(user_input[CONF_REMOTE_API_PORT]),
+                CONF_REMOTE_API_USERNAME: str(
+                    user_input[CONF_REMOTE_API_USERNAME]
+                ).strip(),
+                CONF_REMOTE_API_PASSWORD: str(
+                    user_input[CONF_REMOTE_API_PASSWORD]
+                ),
+                CONF_REMOTE_API_VERIFY_SSL: bool(
+                    user_input[CONF_REMOTE_API_VERIFY_SSL]
+                ),
+            }
+            return self.async_create_entry(title="", data=options)
+
+        current = self.config_entry.options
+        return self.async_show_form(
+            step_id="illuminance",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_ILLUMINANCE_ENABLED,
+                        default=current.get(
+                            CONF_ILLUMINANCE_ENABLED,
+                            DEFAULT_ILLUMINANCE_ENABLED,
+                        ),
+                    ): bool,
+                    vol.Required(
+                        CONF_REMOTE_API_SCHEME,
+                        default=current.get(
+                            CONF_REMOTE_API_SCHEME, DEFAULT_REMOTE_API_SCHEME
+                        ),
+                    ): vol.In({"http": "HTTP", "https": "HTTPS"}),
+                    vol.Required(
+                        CONF_REMOTE_API_PORT,
+                        default=current.get(
+                            CONF_REMOTE_API_PORT, DEFAULT_REMOTE_API_PORT
+                        ),
+                    ): vol.All(vol.Coerce(int), vol.Range(min=1, max=65535)),
+                    vol.Optional(
+                        CONF_REMOTE_API_USERNAME,
+                        default=current.get(
+                            CONF_REMOTE_API_USERNAME, DEFAULT_REMOTE_API_USERNAME
+                        ),
+                    ): str,
+                    vol.Optional(
+                        CONF_REMOTE_API_PASSWORD,
+                        default=current.get(CONF_REMOTE_API_PASSWORD, ""),
+                    ): TextSelector(
+                        TextSelectorConfig(type=TextSelectorType.PASSWORD)
+                    ),
+                    vol.Required(
+                        CONF_REMOTE_API_VERIFY_SSL,
+                        default=current.get(
+                            CONF_REMOTE_API_VERIFY_SSL,
+                            DEFAULT_REMOTE_API_VERIFY_SSL,
+                        ),
+                    ): bool,
+                    vol.Required(
+                        CONF_ILLUMINANCE_POLL_INTERVAL,
+                        default=current.get(
+                            CONF_ILLUMINANCE_POLL_INTERVAL,
+                            DEFAULT_ILLUMINANCE_POLL_INTERVAL,
+                        ),
+                    ): vol.All(vol.Coerce(int), vol.Range(min=15, max=3600)),
+                }
+            ),
         )
 
     async def async_step_entities(

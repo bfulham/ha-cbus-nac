@@ -2,31 +2,55 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 import logging
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import (
     CONF_ENABLED,
     CONF_HOST_OVERRIDE,
+    CONF_ILLUMINANCE_ENABLED,
+    CONF_ILLUMINANCE_POLL_INTERVAL,
     CONF_INCLUDE_INTERNAL,
     CONF_MONITOR_APPLICATION,
     CONF_MOTION_SENSORS,
     CONF_PORT_OVERRIDE,
+    CONF_REMOTE_API_PASSWORD,
+    CONF_REMOTE_API_PORT,
+    CONF_REMOTE_API_SCHEME,
+    CONF_REMOTE_API_USERNAME,
+    CONF_REMOTE_API_VERIFY_SSL,
+    DEFAULT_ILLUMINANCE_ENABLED,
+    DEFAULT_ILLUMINANCE_POLL_INTERVAL,
     DEFAULT_INCLUDE_INTERNAL,
     DEFAULT_MOTION_SENSORS,
+    DEFAULT_REMOTE_API_PORT,
+    DEFAULT_REMOTE_API_SCHEME,
+    DEFAULT_REMOTE_API_USERNAME,
+    DEFAULT_REMOTE_API_VERIFY_SSL,
     EVENT_CBUS,
 )
 from .protocol import CbusCniConnection, CbusLevelEvent
+from .unit_parameter import (
+    NacRemoteClient,
+    NacRemoteSettings,
+    UnitParameterError,
+    light_level_alias,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
 GroupKey = tuple[int, int, int]
+UnitKey = tuple[int, int]
+ListenerKey = GroupKey | UnitKey | tuple[int]
 
 
 @dataclass(slots=True)
@@ -38,8 +62,18 @@ class GroupState:
     source: int | None = None
 
 
+@dataclass(slots=True)
+class IlluminanceState:
+    """Last value read for one physical C-Bus sensor unit."""
+
+    value: float | None = None
+    available: bool = False
+    last_updated: datetime | None = None
+    last_error: str | None = None
+
+
 class CbusRuntime:
-    """Own all CNI connections for one imported Toolkit project."""
+    """Own all CNI and NAC remote-service connections for one project."""
 
     def __init__(
         self,
@@ -52,7 +86,11 @@ class CbusRuntime:
         self.project = project
         self.connections: dict[int, CbusCniConnection] = {}
         self.states: dict[GroupKey, GroupState] = defaultdict(GroupState)
-        self._listeners: dict[GroupKey | tuple[int], set[Callable[[], None]]] = defaultdict(set)
+        self.illuminance_states: dict[UnitKey, IlluminanceState] = defaultdict(
+            IlluminanceState
+        )
+        self._listeners: dict[ListenerKey, set[Callable[[], None]]] = defaultdict(set)
+        self._illuminance_tasks: list[asyncio.Task[None]] = []
 
     @property
     def include_internal(self) -> bool:
@@ -66,7 +104,29 @@ class CbusRuntime:
         """Return whether motion-named groups are binary sensors."""
         return bool(self.entry.options.get(CONF_MOTION_SENSORS, DEFAULT_MOTION_SENSORS))
 
-    def effective_connection(self, network: dict[str, Any]) -> tuple[bool, str | None, int | None, int]:
+    @property
+    def illuminance_enabled(self) -> bool:
+        """Return whether Unit Parameter illuminance entities are enabled."""
+        return bool(
+            self.entry.options.get(
+                CONF_ILLUMINANCE_ENABLED, DEFAULT_ILLUMINANCE_ENABLED
+            )
+        )
+
+    @property
+    def illuminance_poll_interval(self) -> int:
+        """Return the remote-object refresh interval in seconds."""
+        value = self.entry.options.get(
+            CONF_ILLUMINANCE_POLL_INTERVAL, DEFAULT_ILLUMINANCE_POLL_INTERVAL
+        )
+        try:
+            return max(15, int(value))
+        except (TypeError, ValueError):
+            return DEFAULT_ILLUMINANCE_POLL_INTERVAL
+
+    def effective_connection(
+        self, network: dict[str, Any]
+    ) -> tuple[bool, str | None, int | None, int]:
         """Resolve project connection details and user overrides."""
         address = network["address"]
         interface = network["interface"]
@@ -86,8 +146,40 @@ class CbusRuntime:
         )
         return enabled, host, port, monitor_app
 
+    def remote_settings(self, network: dict[str, Any]) -> NacRemoteSettings | None:
+        """Build the global remote-service settings for one network's NAC."""
+        _enabled, host, _port, _app = self.effective_connection(network)
+        if not host:
+            return None
+        scheme = str(
+            self.entry.options.get(CONF_REMOTE_API_SCHEME, DEFAULT_REMOTE_API_SCHEME)
+        ).casefold()
+        if scheme not in ("http", "https"):
+            scheme = DEFAULT_REMOTE_API_SCHEME
+        default_port = 443 if scheme == "https" else DEFAULT_REMOTE_API_PORT
+        try:
+            port = int(self.entry.options.get(CONF_REMOTE_API_PORT, default_port))
+        except (TypeError, ValueError):
+            port = default_port
+        return NacRemoteSettings(
+            scheme=scheme,
+            host=host,
+            port=port,
+            username=str(
+                self.entry.options.get(
+                    CONF_REMOTE_API_USERNAME, DEFAULT_REMOTE_API_USERNAME
+                )
+            ),
+            password=str(self.entry.options.get(CONF_REMOTE_API_PASSWORD, "")),
+            verify_ssl=bool(
+                self.entry.options.get(
+                    CONF_REMOTE_API_VERIFY_SSL, DEFAULT_REMOTE_API_VERIFY_SSL
+                )
+            ),
+        )
+
     async def async_start(self) -> None:
-        """Start all enabled direct CNI connections."""
+        """Start all enabled direct CNI connections and optional sensor polling."""
         for network in self.project["networks"]:
             address = network["address"]
             enabled, host, port, monitor_app = self.effective_connection(network)
@@ -103,8 +195,17 @@ class CbusRuntime:
             self.connections[address] = connection
             connection.start()
 
+        if self.illuminance_enabled:
+            self._start_illuminance_pollers()
+
     async def async_stop(self) -> None:
-        """Stop all network connections."""
+        """Stop all network connections and polling tasks."""
+        for task in self._illuminance_tasks:
+            task.cancel()
+        if self._illuminance_tasks:
+            await asyncio.gather(*self._illuminance_tasks, return_exceptions=True)
+        self._illuminance_tasks.clear()
+
         for connection in list(self.connections.values()):
             await connection.stop()
         self.connections.clear()
@@ -114,8 +215,8 @@ class CbusRuntime:
         connection = self.connections.get(network)
         return bool(connection and connection.connected)
 
-    def subscribe(self, key: GroupKey | tuple[int], callback: Callable[[], None]) -> Callable[[], None]:
-        """Subscribe to a group or network availability update."""
+    def subscribe(self, key: ListenerKey, callback: Callable[[], None]) -> Callable[[], None]:
+        """Subscribe to a group, unit, or network availability update."""
         self._listeners[key].add(callback)
 
         def unsubscribe() -> None:
@@ -134,8 +235,13 @@ class CbusRuntime:
         connection = self.connections.get(network)
         if connection is None:
             raise ConnectionError(f"Network {network} has no enabled TCP CNI connection")
-        await connection.send_level(application, group, level, transition)
+        if not connection.connected:
+            raise ConnectionError(f"Network {network} CNI is not connected")
+
+        # Update Home Assistant immediately. The live SAL/MMI stream remains the
+        # source of truth and will correct the state if the bus reports otherwise.
         self._apply_level(key, level, None)
+        await connection.send_level(application, group, level, transition)
 
     def group_definitions(self, platform: str) -> list[dict[str, Any]]:
         """Return imported groups that should be exposed on a platform."""
@@ -163,6 +269,96 @@ class CbusRuntime:
                         }
                     )
         return result
+
+    def illuminance_definitions(self) -> list[dict[str, Any]]:
+        """Return physical units imported as illuminance-capable sensors."""
+        if not self.illuminance_enabled:
+            return []
+        return [
+            {"network": network, "unit": unit}
+            for network in self.project["networks"]
+            for unit in network.get("units", [])
+            if unit.get("supports_illuminance")
+        ]
+
+    def _start_illuminance_pollers(self) -> None:
+        """Create one low-rate remote-object task for each usable NAC."""
+        session = async_get_clientsession(self.hass)
+        for index, network in enumerate(self.project["networks"]):
+            units = [
+                unit
+                for unit in network.get("units", [])
+                if unit.get("supports_illuminance")
+            ]
+            settings = self.remote_settings(network)
+            if not units or settings is None:
+                continue
+            client = NacRemoteClient(session, settings)
+            task = self.hass.async_create_task(
+                self._poll_network_illuminance(network, units, client, index * 2),
+                f"cbus_nac_illuminance_{network['address']}",
+            )
+            self._illuminance_tasks.append(task)
+
+    async def _poll_network_illuminance(
+        self,
+        network: dict[str, Any],
+        units: list[dict[str, Any]],
+        client: NacRemoteClient,
+        initial_delay: int,
+    ) -> None:
+        """Refresh all exported Unit Parameter objects from one NAC."""
+        if initial_delay:
+            await asyncio.sleep(initial_delay)
+        while True:
+            await self._refresh_network_illuminance(network, units, client)
+            await asyncio.sleep(self.illuminance_poll_interval)
+
+    async def _refresh_network_illuminance(
+        self,
+        network: dict[str, Any],
+        units: list[dict[str, Any]],
+        client: NacRemoteClient,
+    ) -> None:
+        network_address = network["address"]
+        try:
+            objects = await client.async_read_objects()
+        except UnitParameterError as err:
+            message = str(err)
+            _LOGGER.debug(
+                "Could not update C-Bus illuminance values for network %s: %s",
+                network_address,
+                message,
+            )
+            for unit in units:
+                self._set_illuminance_error((network_address, unit["address"]), message)
+            return
+
+        for unit in units:
+            key = (network_address, unit["address"])
+            alias = light_level_alias(unit["address"])
+            value = objects.get(alias)
+            if value is None:
+                self._set_illuminance_error(
+                    key,
+                    "Unit Parameter light-level object is not configured or exported "
+                    f"on this NAC ({alias})",
+                )
+                continue
+            state = self.illuminance_states[key]
+            state.value = value
+            state.available = True
+            state.last_updated = datetime.now(UTC)
+            state.last_error = None
+            self._notify(key)
+
+    def _set_illuminance_error(self, key: UnitKey, message: str) -> None:
+        state = self.illuminance_states[key]
+        changed = state.available or state.last_error != message
+        state.available = False
+        state.last_error = message
+        if changed:
+            self._notify(key)
 
     def _handle_event(self, network: int, event: CbusLevelEvent) -> None:
         key = (network, event.application, event.group)
@@ -202,6 +398,6 @@ class CbusRuntime:
             if len(key) == 3 and key[0] == network:
                 self._notify(key)
 
-    def _notify(self, key: GroupKey | tuple[int]) -> None:
+    def _notify(self, key: ListenerKey) -> None:
         for callback in tuple(self._listeners.get(key, ())):
             callback()

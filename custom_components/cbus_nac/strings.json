@@ -4,7 +4,7 @@
     "step": {
       "user": {
         "title": "Import a C-Bus Toolkit project",
-        "description": "Upload a Toolkit `.cbz` backup or project XML. The integration imports project/network names, CNI IP addresses and ports, custom lighting applications, and group tags.",
+        "description": "Upload a Toolkit `.cbz` backup or project XML. The integration imports project/network names, CNI IP addresses and ports, custom lighting applications, group tags, and supported physical sensor units.",
         "data": {
           "project_file": "Toolkit project file"
         }
@@ -41,7 +41,8 @@
         "title": "C-Bus NAC options",
         "menu_options": {
           "connections": "Network connections",
-          "entities": "Imported entities"
+          "entities": "Imported entities",
+          "illuminance": "Illuminance sensors"
         }
       },
       "connections": {
@@ -66,6 +67,19 @@
         "data": {
           "include_internal_groups": "Include generated/internal groups",
           "motion_groups_as_binary_sensors": "Expose motion groups as binary sensors"
+        }
+      },
+      "illuminance": {
+        "title": "Illuminance sensors",
+        "description": "Read ambient light directly from physical C-Bus sensor units through each 5500NAC built-in Unit Parameter objects. This does not require a Lighting broadcast group. Remote services must be enabled, and each sensor must have an exported 0/255/<unit>/2 Light level object on its local NAC.",
+        "data": {
+          "illuminance_enabled": "Enable physical illuminance sensors",
+          "remote_api_scheme": "Remote-service protocol",
+          "remote_api_port": "Remote-service port",
+          "remote_api_username": "Remote-service username",
+          "remote_api_password": "Remote-service password",
+          "remote_api_verify_ssl": "Verify HTTPS certificate",
+          "illuminance_poll_interval": "Refresh interval (seconds)"
         }
       }
     }
