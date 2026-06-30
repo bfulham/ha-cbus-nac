@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.1
+
+- Fixed all TCP CNI connections repeatedly disconnecting when the first received line was stored as a `bytearray`.
+- Normalised all bytes-like CNI input before decoding.
+- Added regression coverage for `bytearray` input from the receive buffer.
+
 ## 0.1.0
 
 - Initial direct TCP CNI implementation.

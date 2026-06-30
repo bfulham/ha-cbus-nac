@@ -87,9 +87,15 @@ def transition_to_ramp_code(seconds: float | None) -> int:
     return min(_RAMP_SECONDS, key=lambda code: abs(_RAMP_SECONDS[code] - seconds))
 
 
-def parse_cni_line(line: bytes | str) -> list[CbusLevelEvent]:
+def parse_cni_line(
+    line: bytes | bytearray | memoryview | str,
+) -> list[CbusLevelEvent]:
     """Decode a CNI line into zero or more group events."""
-    text = line.decode("ascii", errors="ignore") if isinstance(line, bytes) else line
+    text = (
+        line
+        if isinstance(line, str)
+        else bytes(line).decode("ascii", errors="ignore")
+    )
     text = text.strip().lstrip("\\")
     if not text or _CONFIRM_RE.match(text):
         return []
@@ -317,9 +323,9 @@ class CbusCniConnection:
             while b"\r" in buffer:
                 raw, _, remainder = buffer.partition(b"\r")
                 buffer = bytearray(remainder)
-                raw = raw.strip(b"\n")
-                if raw:
-                    self._handle_line(raw)
+                raw_bytes = bytes(raw).strip(b"\n")
+                if raw_bytes:
+                    self._handle_line(raw_bytes)
 
     def _handle_line(self, raw: bytes) -> None:
         text = raw.decode("ascii", errors="ignore").strip()

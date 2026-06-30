@@ -23,3 +23,15 @@ def test_parse_mmi():
     packet = payload + bytes([checksum(payload)])
     events = parse_cni_line(packet.hex())
     assert [(e.group, e.is_on) for e in events] == [(0, True), (2, True), (3, False)]
+
+
+def test_parse_bytearray_from_receive_buffer():
+    """The TCP receive buffer yields bytearray slices, not bytes."""
+    payload = bytes.fromhex("050138007921")
+    packet = payload + bytes([checksum(payload)])
+    line = bytearray(packet.hex().upper().encode("ascii"))
+    events = parse_cni_line(line)
+    assert len(events) == 1
+    assert events[0].application == 0x38
+    assert events[0].group == 0x21
+    assert events[0].level == 255

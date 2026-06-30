@@ -2,9 +2,9 @@
 
 Direct, local Home Assistant integration for Clipsal/Schneider C-Bus through the built-in CNI service of a 5500NAC/5500SHAC or compatible Ethernet CNI. No C-Gate, MQTT bridge, add-on, or Lua code on the NAC is required.
 
-> **v0.1.0 is an early hardware-test release.** The Toolkit importer and protocol framing are covered by local tests, but this package could not be exercised against the private CNI addresses in the supplied project. Start with a small number of non-critical groups and keep Toolkit available for recovery.
+> **v0.1.1 is an early hardware-test release.** The Toolkit importer and protocol framing are covered by local tests, but this package could not be exercised against the private CNI addresses in the supplied project. Start with a small number of non-critical groups and keep Toolkit available for recovery.
 
-## What v0.1.0 does
+## What v0.1.1 does
 
 - Uploads a Toolkit `.cbz` backup or legacy XML during UI setup.
 - Imports project names, network names, CNI IP addresses and ports.
@@ -79,7 +79,7 @@ Open **Configure → Network connections**, select a network, then optionally se
 
 Blank overrides follow the latest values imported from Toolkit, so changing an IP/port in a newly uploaded project takes effect automatically.
 
-## Entity import rules in v0.1.0
+## Entity import rules in v0.1.1
 
 Toolkit groups in applications referenced by programmed units are imported. By default, generated/internal names are skipped, including:
 
@@ -112,7 +112,7 @@ Live SAL messages are decoded using the application address in each received pac
 
 ### Protocol scope
 
-v0.1.0 supports the public Lighting Application command subset: ON, OFF, RAMP TO LEVEL and standard MMI. Trigger Control, Enable Control, Measurement, HVAC, scenes and routed bridge control are not yet implemented as native platforms.
+v0.1.1 supports the public Lighting Application command subset: ON, OFF, RAMP TO LEVEL and standard MMI. Trigger Control, Enable Control, Measurement, HVAC, scenes and routed bridge control are not yet implemented as native platforms.
 
 ## Debug logging
 
