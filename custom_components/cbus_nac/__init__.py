@@ -7,8 +7,10 @@ from contextlib import suppress
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryError
+from homeassistant.helpers import device_registry as dr
 
 from .const import CONF_PROJECT_KEY, DOMAIN, PLATFORMS
+from .entity import cbus_controller_device_info
 from .runtime import CbusRuntime
 from .storage import async_delete_project, async_load_project
 
@@ -31,6 +33,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     runtime = CbusRuntime(hass, entry, project)
     domain_data[entry.entry_id] = runtime
+
+    # Child devices use via_device to form a controller -> lights/multisensors
+    # topology. Register every imported controller before entity platforms are
+    # forwarded so Home Assistant can resolve those parent identifiers.
+    device_registry = dr.async_get(hass)
+    for network in project["networks"]:
+        device_registry.async_get_or_create(
+            config_entry_id=entry.entry_id,
+            **cbus_controller_device_info(runtime, network),
+        )
 
     try:
         await runtime.async_start()

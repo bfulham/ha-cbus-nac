@@ -63,7 +63,7 @@
       },
       "entities": {
         "title": "Imported entities",
-        "description": "Physical PIR units are created as their own Home Assistant devices. Motion is derived automatically from the PIR output blocks stored in the Toolkit project, so a separately named Motion group is not required.",
+        "description": "Each CNI controller is a hub. Its controllable groups are placed in a separate Lights child device, while each physical PIR/multisensor is a child device containing Motion and optional Illuminance. Motion is derived automatically from Toolkit PIR output blocks, so a separately named Motion group is not required.",
         "data": {
           "include_internal_groups": "Include generated/internal groups",
           "motion_groups_as_binary_sensors": "Expose physical PIR units as motion sensors"

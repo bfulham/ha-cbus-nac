@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.7
+
+- Make each imported NAC/CNI network a Home Assistant controller hub.
+- Create one child `Lights` device per controller and move all light/switch group entities to it without changing their unique IDs.
+- Create one child device per physical multisensor, containing both Motion and Illuminance entities.
+- Link both the lights device and all multisensor devices to their controller through Home Assistant's `via_device` hierarchy.
+- Pre-register controller hubs before entity platforms load so every child-device relationship resolves cleanly.
+- Keep the CNI connection entity on the controller hub as a diagnostic entity.
+- Preserve existing controller and entity identifiers so upgrades reorganise devices without breaking automations.
+
 ## 0.1.6
 
 - Create one Home Assistant device per physical `SENPIRIB`/`5753L` sensor, containing both Motion and Illuminance entities.

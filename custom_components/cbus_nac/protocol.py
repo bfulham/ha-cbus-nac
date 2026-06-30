@@ -204,7 +204,13 @@ class CbusCniConnection:
         self._connected = False
         self._write_lock = asyncio.Lock()
         self._confirmations: dict[str, asyncio.Future[bool]] = {}
-        self._confirmation_chars = itertools.cycle("jklmnopqrstuvwxyzg")
+        # The PCI/CNI supports confirmation tags g..z. Tags g, h and i are
+        # reserved here for the three initialisation commands, leaving 17
+        # independent tags for normal commands. Commands may be written
+        # back-to-back and are matched to asynchronous two-byte confirmations.
+        self._confirmation_codes = "jklmnopqrstuvwxyz"
+        self._confirmation_chars = itertools.cycle(self._confirmation_codes)
+        self._confirmation_slots = asyncio.Semaphore(len(self._confirmation_codes))
         self._paused_until = 0.0
         self.last_error: str | None = None
 
@@ -252,22 +258,46 @@ class CbusCniConnection:
         level: int,
         transition: float | None = None,
     ) -> None:
-        """Send a group level command and await the PCI confirmation."""
-        if not self._writer or not self._connected:
-            raise ConnectionError("C-Bus CNI is not connected")
+        """Send a group level command and await its asynchronous confirmation.
+
+        The CNI confirmation tag exists specifically so transmit and receive
+        processing can be decoupled. Only the short socket write is serialised;
+        waiting for a prior C-Bus acknowledgement must not block later commands.
+        """
         command = encode_lighting_command(application, group, level, transition)
-        confirmation = next(self._confirmation_chars)
-        future = asyncio.get_running_loop().create_future()
-        async with self._write_lock:
-            self._confirmations[confirmation] = future
-            self._writer.write(command + confirmation.encode("ascii") + b"\r")
-            await self._writer.drain()
-            try:
-                success = await asyncio.wait_for(future, timeout=5)
-            finally:
+        await self._confirmation_slots.acquire()
+        confirmation: str | None = None
+        future: asyncio.Future[bool] | None = None
+        try:
+            async with self._write_lock:
+                if not self._writer or not self._connected:
+                    raise ConnectionError("C-Bus CNI is not connected")
+                confirmation = self._allocate_confirmation()
+                future = asyncio.get_running_loop().create_future()
+                self._confirmations[confirmation] = future
+                self._writer.write(
+                    command + confirmation.encode("ascii") + b"\r"
+                )
+                await self._writer.drain()
+
+            # Confirmations are not CR-terminated. The receive loop resolves
+            # this future as soon as the two confirmation bytes arrive.
+            assert future is not None
+            success = await asyncio.wait_for(future, timeout=5)
+            if not success:
+                raise ConnectionError("The CNI rejected the C-Bus command")
+        finally:
+            if confirmation is not None:
                 self._confirmations.pop(confirmation, None)
-        if not success:
-            raise ConnectionError("The CNI rejected the C-Bus command")
+            self._confirmation_slots.release()
+
+    def _allocate_confirmation(self) -> str:
+        """Return a confirmation tag that is not currently in flight."""
+        for _ in self._confirmation_codes:
+            confirmation = next(self._confirmation_chars)
+            if confirmation not in self._confirmations:
+                return confirmation
+        raise RuntimeError("No free C-Bus confirmation tag")
 
     async def _run(self) -> None:
         retry = 2.0
@@ -320,12 +350,42 @@ class CbusCniConnection:
             if not chunk:
                 raise ConnectionError("CNI closed the TCP connection")
             buffer.extend(chunk)
-            while b"\r" in buffer:
-                raw, _, remainder = buffer.partition(b"\r")
-                buffer = bytearray(remainder)
-                raw_bytes = bytes(raw).strip(b"\n")
-                if raw_bytes:
-                    self._handle_line(raw_bytes)
+            self._consume_receive_buffer(buffer)
+
+    def _consume_receive_buffer(self, buffer: bytearray) -> None:
+        """Consume confirmations immediately and CR-terminated replies normally.
+
+        PCI/CNI confirmations are exactly two bytes (for example ``j.``) and,
+        unlike ordinary replies, are not terminated by CR/LF. Waiting for a CR
+        delayed every command until the next MMI report and also discarded that
+        report when it was concatenated to the confirmation.
+        """
+        confirmation_results = b".#$%"
+        while buffer:
+            # Ordinary replies may leave an LF behind after their CR terminator.
+            while buffer and buffer[0] in (0x0D, 0x0A):
+                del buffer[0]
+            if not buffer:
+                return
+
+            # A confirmation can be delivered on its own, back-to-back with
+            # another confirmation, or immediately before a normal reply.
+            if 0x67 <= buffer[0] <= 0x7A:  # g..z
+                if len(buffer) < 2:
+                    return
+                if buffer[1] in confirmation_results:
+                    raw = bytes(buffer[:2])
+                    del buffer[:2]
+                    self._handle_line(raw)
+                    continue
+
+            end = buffer.find(b"\r")
+            if end < 0:
+                return
+            raw = bytes(buffer[:end]).strip(b"\n")
+            del buffer[: end + 1]
+            if raw:
+                self._handle_line(raw)
 
     def _handle_line(self, raw: bytes) -> None:
         text = raw.decode("ascii", errors="ignore").strip()

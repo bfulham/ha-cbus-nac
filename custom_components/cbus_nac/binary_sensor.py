@@ -9,11 +9,10 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
-from .entity import cbus_unit_device_info
+from .entity import cbus_controller_device_info, cbus_unit_device_info
 from .runtime import CbusRuntime, UnitKey
 
 
@@ -150,12 +149,7 @@ class CbusNetworkConnectivity(BinarySensorEntity):
         self._attr_unique_id = (
             f"{runtime.project['project_id']}:{network['address']}:connectivity"
         )
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, f"{runtime.project['project_id']}:{network['address']}")},
-            name=network["name"],
-            manufacturer="Schneider Electric / Clipsal",
-            model="C-Bus network via CNI",
-        )
+        self._attr_device_info = cbus_controller_device_info(runtime, network)
         self._unsubscribe = None
 
     @property
