@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
+
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryError
@@ -19,11 +21,31 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             "The stored Toolkit project is missing. Reconfigure the integration and upload it again."
         )
 
+    domain_data = hass.data.setdefault(DOMAIN, {})
+
+    # A failed or interrupted setup must never leave an old runtime connected to
+    # the single-client CNI ports. Stop any stale runtime before replacing it.
+    stale_runtime: CbusRuntime | None = domain_data.pop(entry.entry_id, None)
+    if stale_runtime is not None:
+        await stale_runtime.async_stop()
+
     runtime = CbusRuntime(hass, entry, project)
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = runtime
+    domain_data[entry.entry_id] = runtime
+
+    try:
+        await runtime.async_start()
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    except BaseException:
+        # Platform import/setup errors can occur after the CNI tasks have started.
+        # Clean them up immediately so a retry does not compete with an orphaned
+        # connection manager for the NAC's single CNI client slot.
+        await runtime.async_stop()
+        with suppress(Exception):
+            await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+        domain_data.pop(entry.entry_id, None)
+        raise
+
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
-    await runtime.async_start()
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 
 

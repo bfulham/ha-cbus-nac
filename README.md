@@ -2,9 +2,11 @@
 
 Direct, local Home Assistant integration for Clipsal/Schneider C-Bus through the built-in CNI service of a 5500NAC/5500SHAC or compatible Ethernet CNI. No C-Gate, MQTT bridge, add-on, or Lua code on the NAC is required.
 
-> **v0.1.4 is an early hardware-test release.** The Toolkit importer and protocol framing are covered by local tests, but this package could not be exercised against the private CNI addresses in the supplied project. Start with a small number of non-critical groups and keep Toolkit available for recovery.
+> **v0.1.5 is an early hardware-test release.** The Toolkit importer and protocol framing are covered by local tests, but this package could not be exercised against the private CNI addresses in the supplied project. Start with a small number of non-critical groups and keep Toolkit available for recovery.
 
-## What v0.1.4 does
+> **v0.1.5 compatibility fix:** Home Assistant 2026.6 no longer exposes `UnitOfIlluminance`. This release uses `LIGHT_LUX` and cleans up CNI tasks if a platform setup fails, so failed setup attempts cannot leave orphaned CNI clients.
+
+## What v0.1.5 does
 
 - Processes non-terminated PCI/CNI command confirmations immediately, avoiding the previous wait for the next MMI report.
 - Pipelines simultaneous Home Assistant commands using independent CNI confirmation tags.
@@ -63,7 +65,7 @@ All saved TCP CNI interfaces are enabled by default. The integration creates a c
 
 ## Direct illuminance sensors (no broadcast group)
 
-v0.1.4 imports the physical unit address and name for supported light-level sensors from the Toolkit project. For the supplied THEBEND project it detects 87 illuminance-capable units: 86 `5753L` multisensors and one `5031PE` light-level sensor.
+v0.1.5 imports the physical unit address and name for supported light-level sensors from the Toolkit project. For the supplied THEBEND project it detects 87 illuminance-capable units: 86 `5753L` multisensors and one `5031PE` light-level sensor.
 
 This feature does **not** use a C-Bus Lighting group or light-level broadcast address. It uses the 5500NAC built-in **255 — Unit Parameter** application. The NAC polls the physical unit, and Home Assistant reads the resulting exported object through `/scada-remote/`. No Lua or other custom code is installed on the NAC.
 
@@ -88,7 +90,7 @@ For example, Toolkit network 253 unit 21 is read from `0/255/21/2` on the NAC at
 
 ### Home Assistant configuration
 
-1. After updating to v0.1.4, use **Reconfigure** and upload the Toolkit `.cbz` again. This updates the stored project model with physical unit records.
+1. After updating to v0.1.5, use **Reconfigure** and upload the Toolkit `.cbz` again. This updates the stored project model with physical unit records.
 2. Open **Configure → Illuminance sensors**.
 3. Enable physical illuminance sensors.
 4. Enter the NAC Remote Services protocol, port, username and password. The same credentials are used for all imported NAC hosts.
@@ -121,7 +123,7 @@ Open **Configure → Network connections**, select a network, then optionally se
 
 Blank overrides follow the latest values imported from Toolkit, so changing an IP/port in a newly uploaded project takes effect automatically.
 
-## Entity import rules in v0.1.4
+## Entity import rules in v0.1.5
 
 Toolkit groups in applications referenced by programmed units are imported. By default, generated/internal names are skipped, including:
 
@@ -154,7 +156,7 @@ Live SAL messages are decoded using the application address in each received pac
 
 ### Protocol scope
 
-v0.1.4 supports the public Lighting Application command subset: ON, OFF, RAMP TO LEVEL and standard MMI. Trigger Control, Enable Control, Measurement, HVAC, scenes and routed bridge control are not yet implemented as native platforms.
+v0.1.5 supports the public Lighting Application command subset: ON, OFF, RAMP TO LEVEL and standard MMI. Trigger Control, Enable Control, Measurement, HVAC, scenes and routed bridge control are not yet implemented as native platforms.
 
 ## Debug logging
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.5
+
+- Fixed integration setup failing on current Home Assistant releases because `UnitOfIlluminance` was removed; illuminance entities now use the supported `LIGHT_LUX` constant.
+- Stop all CNI and illuminance tasks when any platform fails to import or set up.
+- Stop and replace a stale runtime before retrying setup, preventing orphaned clients from occupying the NAC single-client CNI ports.
+
 ## 0.1.4
 
 - Import illuminance-capable physical units (`SENPIRIB`/`5753L` and `SENLL`/`5031PE`) from Toolkit CBZ/XML files.
