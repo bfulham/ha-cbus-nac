@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.2
+
+- Fixed command acknowledgements being delayed until the next CR-terminated MMI packet.
+- Parse the PCI/CNI two-byte confirmation response immediately, as required by the serial-interface protocol.
+- Allow multiple C-Bus commands to be in flight using independent confirmation tags instead of waiting for each command before writing the next.
+- Apply requested Home Assistant state optimistically while live C-Bus traffic remains the source of truth.
+
+
 ## 0.1.1
 
 - Fixed all TCP CNI connections repeatedly disconnecting when the first received line was stored as a `bytearray`.
